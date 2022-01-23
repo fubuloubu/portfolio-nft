@@ -113,10 +113,12 @@ portfolioOperator: public(HashMap[uint256, address])
 
 
 @external
-def __init__():
+def __init__(underlying: ERC20):
     """
     @dev Contract constructor.
     """
+    self.underlying = underlying
+
     # ERC721
     self.supportsInterface[
         0x0000000000000000000000000000000000000000000000000000000001ffc9a7
