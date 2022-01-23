@@ -48,6 +48,18 @@ event ApprovalForAll:
     operator: indexed(address)
     approved: bool
 
+# @dev Mapping of TokenID to nonce values used for ERC4494 signature verification
+nonces: public(HashMap[uint256, uint256])
+
+DOMAIN_SEPARATOR: public(bytes32)
+
+
+EIP712_DOMAIN_TYPEHASH: constant(bytes32) = keccak256(
+    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+)
+EIP712_DOMAIN_NAMEHASH: constant(bytes32) = keccak256("Portfolio NFT")
+EIP712_DOMAIN_VERSIONHASH: constant(bytes32) = keccak256("1")
+
 # @dev Mapping of interface id to bool about whether or not it's supported
 # NOTE: incompatible w/ ERC165 until `bytes4` is added
 supportsInterface: public(HashMap[bytes32, bool])
@@ -114,6 +126,38 @@ def __init__():
     self.supportsInterface[
         0x0000000000000000000000000000000000000000000000000000000080ac58cd
     ] = True
+
+    # ERC4494
+    self.supportsInterface[
+        0x000000000000000000000000000000000000000000000000000000005604e225
+    ] = True
+
+    # ERC712 domain separator for ERC4494
+    self.DOMAIN_SEPARATOR = keccak256(
+        _abi_encode(
+            EIP712_DOMAIN_TYPEHASH,
+            EIP712_DOMAIN_NAMEHASH,
+            EIP712_DOMAIN_VERSIONHASH,
+            chain.id,
+            self,
+        )
+    )
+
+
+@external
+def setDomainSeparator():
+    """
+    @dev Update the domain separator in case of a hardfork where chain ID changes
+    """
+    self.DOMAIN_SEPARATOR = keccak256(
+        _abi_encode(
+            EIP712_DOMAIN_TYPEHASH,
+            EIP712_DOMAIN_NAMEHASH,
+            EIP712_DOMAIN_VERSIONHASH,
+            chain.id,
+            self,
+        )
+    )
 
 
 ### VIEW FUNCTIONS ###
@@ -264,7 +308,58 @@ def approve(operator: address, tokenId: uint256):
     log Approval(owner, operator, tokenId)
 
 
-# TODO: Add permit-like approval (EIP-4494?)
+@external
+def permit(spender: address, tokenId: uint256, deadline: uint256, sig: Bytes[65]):
+    assert block.timestamp <= deadline
+
+    owner: address = self.portfolios[tokenId].owner
+    assert owner != ZERO_ADDRESS
+    nonce: uint256 = self.nonces[tokenId]
+
+    # Compose EIP-712 message
+    message: bytes32 = keccak256(
+        _abi_encode(
+            0x1901,
+            self.DOMAIN_SEPARATOR,
+            keccak256(
+                _abi_encode(
+                    keccak256(
+                        "Permit(address spender,uint256 tokenId,uint256 nonce,uint256 deadline)"
+                    ),
+                    spender,
+                    tokenId,
+                    nonce,
+                    deadline,
+                )
+            )
+        )
+    )
+
+    # Validate signature
+    v: uint256 = 0
+    r: uint256 = 0
+    s: uint256 = 0
+
+    if len(sig) == 65:
+        # Normal encoded VRS signatures
+        v = convert(slice(sig, 0, 1), uint256)
+        r = convert(slice(sig, 1, 32), uint256)
+        s = convert(slice(sig, 33, 32), uint256)
+
+    elif len(sig) == 64:
+        # EIP-2098 compact signatures
+        r = convert(slice(sig, 0, 32), uint256)
+        v = convert(slice(sig, 33, 1), uint256)
+        s = convert(slice(sig, 34, 31), uint256)
+
+    else:
+        raise  # Other schemes not supported
+
+    assert ecrecover(message, v, r, s) == owner
+
+    self.nonces[tokenId] = nonce + 1
+    self.portfolioOperator[tokenId] = spender
+
 
 @external
 def setApprovalForAll(operator: address, approved: bool):
