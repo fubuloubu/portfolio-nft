@@ -616,7 +616,8 @@ def unallocate(tokenId: uint256, strategy: address, _shares: uint256 = MAX_UINT2
 
 @view
 @external
-def totalPortfolioValue(tokenId: uint256) -> uint256:
+def estimatedValue(tokenId: uint256) -> uint256:
+    assert self.portfolios[tokenId].blockCreated > 0
     total_underlying: uint256 = self.portfolios[tokenId].unallocated
 
     for allocation in self.portfolios[tokenId].allocations:
