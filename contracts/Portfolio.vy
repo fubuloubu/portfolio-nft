@@ -73,20 +73,12 @@ interface Strategy:
     # Underlying token that shares are in
     def underlying() -> address: view
 
-    # ERC20 Functions
-    def balanceOf(hodler: address) -> uint256: view
-    def transfer(receiver: address, amount: uint256) -> bool: view
-    def transferFrom(sender: address, receiver: address, amount: uint256) -> bool: view
-
     # Returns shares
-    def calculateShares(underlyingAmount: uint256) -> uint256: view
     def deposit(receiver: address, amount: uint256) -> uint256: nonpayable
-    def withdraw(sender: address, receiver: address, amount: uint256) -> uint256: nonpayable
 
     # Returns tokens
     def totalUnderlying() -> uint256: view
-    def calculateUnderlying(shareAmount: uint256) -> uint256: view
-    def mint(receiver: address, shares: uint256) -> uint256: nonpayable
+    def exchangeRate() -> uint256: view
     def redeem(sender: address, receiver: address, shares: uint256) -> uint256: nonpayable
 
 struct StrategyAllocation:
@@ -621,6 +613,10 @@ def estimatedValue(tokenId: uint256) -> uint256:
     total_underlying: uint256 = self.portfolios[tokenId].unallocated
 
     for allocation in self.portfolios[tokenId].allocations:
-        total_underlying += Strategy(allocation.strategy).calculateUnderlying(allocation.numShares)
+        total_underlying += (
+            Strategy(allocation.strategy).exchangeRate()
+            * allocation.numShares
+            / Strategy(allocation.strategy).totalUnderlying()
+        )
 
     return total_underlying

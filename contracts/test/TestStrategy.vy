@@ -7,13 +7,17 @@ interface ERC4626:
     def underlying() -> address: view
 
     # Returns shares
-    def calculateShares(underlyingAmount: uint256) -> uint256: view
+    def previewDeposit(amount: uint256) -> uint256: nonpayable
+    def previewWithdraw(amount: uint256) -> uint256: nonpayable
     def deposit(receiver: address, amount: uint256) -> uint256: nonpayable
     def withdraw(sender: address, receiver: address, amount: uint256) -> uint256: nonpayable
 
     # Returns tokens
+    def exchangeRate() -> uint256: view
     def totalUnderlying() -> uint256: view
-    def calculateUnderlying(shareAmount: uint256) -> uint256: view
+    def balanceOfUnderlying(owner: address) -> uint256: view
+    def previewMint(shares: uint256) -> uint256: nonpayable
+    def previewRedeem(shares: uint256) -> uint256: nonpayable
     def mint(receiver: address, shares: uint256) -> uint256: nonpayable
     def redeem(sender: address, receiver: address, shares: uint256) -> uint256: nonpayable
 
@@ -44,12 +48,34 @@ totalSupply: public(uint256)
 balanceOf: public(HashMap[address, uint256])
 allowance: public(HashMap[address, HashMap[address, uint256]])
 
+NAME: constant(String[10]) = "TEST TOKEN"
+SYMBOL: constant(String[4]) = "TEST"
+DECIMALS: constant(uint8) = 18
+
 underlying: public(ERC20)
 
 
 @external
 def __init__(underlying: ERC20):
     self.underlying = underlying
+
+
+@view
+@external
+def name() -> String[10]:
+    return NAME
+
+
+@view
+@external
+def symbol() -> String[4]:
+    return SYMBOL
+
+
+@view
+@external
+def decimals() -> uint8:
+    return DECIMALS
 
 
 @external
@@ -84,8 +110,8 @@ def _calculateShares(underlyingAmount: uint256) -> uint256:
 
 @view
 @external
-def calculateShares(underlyingAmount: uint256) -> uint256:
-    return self._calculateShares(underlyingAmount)
+def previewDeposit(amount: uint256) -> uint256:
+    return self._calculateShares(amount)
 
 
 @external
@@ -96,6 +122,12 @@ def deposit(receiver: address, amount: uint256) -> uint256:
     self.balanceOf[receiver] += shares
     log Deposit(msg.sender, receiver, amount)
     return shares
+
+
+@view
+@external
+def previewWithdraw(amount: uint256) -> uint256:
+    return self._calculateShares(amount)
 
 
 @external
@@ -126,8 +158,20 @@ def _calculateUnderlying(shareAmount: uint256) -> uint256:
 
 @view
 @external
-def calculateUnderlying(shareAmount: uint256) -> uint256:
-    return self._calculateUnderlying(shareAmount)
+def balanceOfUnderlying(owner: address) -> uint256:
+    return self._calculateUnderlying(self.balanceOf[owner])
+
+
+@view
+@external
+def exchangeRate() -> uint256:
+    return self._calculateUnderlying(10**convert(DECIMALS, uint256))
+
+
+@view
+@external
+def previewMint(shares: uint256) -> uint256:
+    return self._calculateUnderlying(shares)
 
 
 @external
@@ -138,6 +182,12 @@ def mint(receiver: address, shares: uint256) -> uint256:
     self.balanceOf[receiver] += shares
     log Deposit(msg.sender, receiver, amount)
     return amount
+
+
+@view
+@external
+def previewRedeem(shares: uint256) -> uint256:
+    return self._calculateUnderlying(shares)
 
 
 @external
