@@ -90,7 +90,6 @@ struct Portfolio:
     blockCreated: uint256
     # NOTE: Can change allocations without changing the PortfolioId
     allocations: DynArray[StrategyAllocation, MAX_STRATEGIES]
-    unallocated: uint256
 
 # PortfolioID {keccak(originalOwner + blockCreated)} => Portfolio
 portfolios: public(HashMap[uint256, Portfolio])
@@ -371,27 +370,17 @@ def setApprovalForAll(operator: address, approved: bool):
 #### PORTFOLIO MANAGEMENT FUNCTIONS ####
 
 @external
-def mint(_amount: uint256 = MAX_UINT256, owner: address = msg.sender) -> uint256:
+def mint() -> uint256:
     """
-    @dev Create a new Portfolio NFT and send to a given address.
+    @dev Create a new Portfolio NFT
     @notice `tokenId` cannot be owned by someone because of hash production.
-            Portfolio starts out 100% unallocated.
-    @param _amount Amount to fund the new portfolio with (default is msg.sender).
-    @param owner Address to send the newly created Portfolio to (default is current total balance).
     @return uint256 Computed TokenID of new Portfolio.
     """
-
-    amount: uint256 = _amount
-    if _amount == MAX_UINT256:
-        amount = self.underlying.balanceOf(msg.sender)
-
-    self.underlying.transferFrom(msg.sender, self, amount)
-
     # Create token
     tokenId: uint256 = convert(
         keccak256(
             concat(
-                convert(owner, bytes32),
+                convert(msg.sender, bytes32),
                 convert(block.number, bytes32),
             )
         ),
@@ -399,63 +388,13 @@ def mint(_amount: uint256 = MAX_UINT256, owner: address = msg.sender) -> uint256
     )
     assert self.portfolios[tokenId].owner == ZERO_ADDRESS
     self.portfolios[tokenId] = Portfolio({
-        owner: owner,
+        owner: msg.sender,
         blockCreated: block.number,
         allocations: empty(DynArray[StrategyAllocation, MAX_STRATEGIES]),
-        unallocated: amount,
     })
-    self.balanceOf[owner] += 1
+    self.balanceOf[msg.sender] += 1
 
     return tokenId
-
-
-@external
-def deposit(tokenId: uint256, _amount: uint256 = MAX_UINT256) -> uint256:
-    """
-    @dev Add funds to an existing Portfolio NFT.
-    @notice Anyone can deposit funds to any Portfolio.
-    @param tokenId Unique identifier for the Portfolio.
-    @param _amount Amount to fund the new portfolio with.
-    @return uint256 Total unallocated funds in portfolio.
-    """
-
-    amount: uint256 = _amount
-    if _amount == MAX_UINT256:
-        amount = self.underlying.balanceOf(msg.sender)
-
-    self.underlying.transferFrom(msg.sender, self, amount)
-
-    total_unallocated: uint256 = self.portfolios[tokenId].unallocated + amount
-    self.portfolios[tokenId].unallocated = total_unallocated
-
-    return total_unallocated
-
-
-@external
-def withdraw(
-    tokenId: uint256,
-    _amount: uint256 = MAX_UINT256,
-    receiver: address = msg.sender,
-)-> uint256:
-    assert self._isApprovedOrOwner(msg.sender, tokenId)
-
-    # Clear approval if spender is not owner and is not approved for all actions.
-    if self.portfolioOperator[tokenId] == msg.sender:
-        # Reset approvals
-        self.portfolioOperator[tokenId] = ZERO_ADDRESS
-
-    total_unallocated: uint256 = self.portfolios[tokenId].unallocated
-    amount: uint256 = _amount
-    if _amount == MAX_UINT256:
-        amount = total_unallocated
-    else:
-        assert amount <= total_unallocated
-
-    total_unallocated -= amount
-    self.portfolios[tokenId].unallocated = total_unallocated
-    self.underlying.transfer(receiver, amount)
-
-    return total_unallocated
 
 
 @internal
@@ -481,25 +420,30 @@ def _findStrategyIdxInPortfolio(tokenId: uint256, strategy: address) -> (bool, u
 
 
 @external
-def allocate(tokenId: uint256, strategy: address, _amount: uint256 = MAX_UINT256) -> uint256:
-    assert self._isApprovedOrOwner(msg.sender, tokenId)
-
-    # Clear approval if spender is not owner and is not approved for all actions.
-    if self.portfolioOperator[tokenId] == msg.sender:
-        # Reset approvals
-        self.portfolioOperator[tokenId] = ZERO_ADDRESS
-
-    # Ensure that we are not allocating more than funded amount
-    unallocated: uint256 = self.portfolios[tokenId].unallocated
+def allocate(
+    tokenId: uint256,
+    strategy: address,
+    _amount: uint256 = MAX_UINT256,
+    funder: address = msg.sender,
+) -> uint256:
+    # TODO: check that Strategy works w/ ERC4626 interface
     amount: uint256 = _amount
     if _amount == MAX_UINT256:
-        amount = unallocated
-    else:
-        assert amount <= unallocated
+        amount = self.underlying.balanceOf(funder)
 
-    # Deposit unallocated tokens to strategy
-    unallocated -= amount
-    self.portfolios[tokenId].unallocated = unallocated
+    else:
+        assert amount <= self.underlying.balanceOf(funder)
+
+    # Transfer funds here first
+    self.underlying.transferFrom(funder, self, amount)
+
+    # Make sure enough approval space is there for deposit function
+    if self.underlying.allowance(self, strategy) < amount:
+        self.underlying.approve(strategy, MAX_UINT256)  # Do unlimited approval for convienence
+        # NOTE: It is secure to do an unlimited approval, because the Portfolio does not take
+        #       custody of funds for longer than 1 txn.
+
+    # Deposit tokens to strategy
     numShares: uint256 = Strategy(strategy).deposit(self, amount)
 
     # Search for strategy in set
@@ -507,9 +451,11 @@ def allocate(tokenId: uint256, strategy: address, _amount: uint256 = MAX_UINT256
     strategy_idx: uint256 = 0
     strategy_found, strategy_idx = self._findStrategyIdxInPortfolio(tokenId, strategy)
 
+    # NOTE: Add shares to another user's NFT is not an issue because they can only benefit
     if strategy_found:
         # Strategy found, increase allocation
         self.portfolios[tokenId].allocations[strategy_idx].numShares += numShares
+
     else:
         # Strategy not found, add to allocations
         self.portfolios[tokenId].allocations[strategy_idx] = StrategyAllocation({
@@ -517,16 +463,16 @@ def allocate(tokenId: uint256, strategy: address, _amount: uint256 = MAX_UINT256
             numShares: numShares,
         })
 
-    return unallocated
+    return numShares
 
 
 @external
-def transferShares(
+def moveShares(
     ownerTokenId: uint256,
     strategy: address,
     receiverTokenId: uint256,
     _shares: uint256 = MAX_UINT256,
-) -> uint256:
+ ) -> uint256:
     assert self._isApprovedOrOwner(msg.sender, ownerTokenId)
 
     # Clear approval if spender is not owner and is not approved for all actions.
@@ -550,8 +496,7 @@ def transferShares(
         assert shares <= total_shares
 
     # Withdraw shares from owner's Portfolio
-    total_shares -= shares
-    self.portfolios[ownerTokenId].allocations[strategy_idx].numShares = total_shares
+    self.portfolios[ownerTokenId].allocations[strategy_idx].numShares = total_shares - shares
 
     # Search for strategy in receiver's set
     strategy_found, strategy_idx = self._findStrategyIdxInPortfolio(receiverTokenId, strategy)
@@ -569,11 +514,17 @@ def transferShares(
             numShares: shares,
         })
 
-    return total_shares  # Amount of shares left in owner's allocation for Strategy
+    return strategy_idx
 
 
 @external
-def unallocate(tokenId: uint256, strategy: address, _shares: uint256 = MAX_UINT256) -> uint256:
+def unallocate(
+    tokenId: uint256,
+    strategy: address,
+    _shares: uint256 = MAX_UINT256,
+    receiver: address = msg.sender,
+) -> uint256:
+    # Must ensure approval to take shares from NFT
     assert self._isApprovedOrOwner(msg.sender, tokenId)
 
     # Clear approval if spender is not owner and is not approved for all actions.
@@ -585,7 +536,7 @@ def unallocate(tokenId: uint256, strategy: address, _shares: uint256 = MAX_UINT2
     strategy_found: bool = False
     strategy_idx: uint256 = 0
     strategy_found, strategy_idx = self._findStrategyIdxInPortfolio(tokenId, strategy)
-    assert strategy_found
+    assert strategy_found  # Must be a strategy in the NFT
 
     # Find amount of shares to withdraw from strategy
     shares: uint256 = _shares
@@ -596,21 +547,20 @@ def unallocate(tokenId: uint256, strategy: address, _shares: uint256 = MAX_UINT2
     else:
         assert shares <= total_shares
 
-    # Withdraw shares and update unallocated
+    # Withdraw shares and transfer tokens to receiver
     total_shares -= shares
     self.portfolios[tokenId].allocations[strategy_idx].numShares = total_shares
     withdrawn: uint256 = Strategy(strategy).redeem(self, self, shares)
-    unallocated: uint256 = self.portfolios[tokenId].unallocated + withdrawn
-    self.portfolios[tokenId].unallocated = unallocated
+    self.underlying.transfer(receiver, withdrawn)
 
-    return unallocated
+    return withdrawn
 
 
 @view
 @external
 def estimatedValue(tokenId: uint256) -> uint256:
     assert self.portfolios[tokenId].blockCreated > 0
-    total_underlying: uint256 = self.portfolios[tokenId].unallocated
+    total_underlying: uint256 = 0
 
     for allocation in self.portfolios[tokenId].allocations:
         total_underlying += (
