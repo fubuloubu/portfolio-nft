@@ -60,9 +60,16 @@ EIP712_DOMAIN_TYPEHASH: constant(bytes32) = keccak256(
 EIP712_DOMAIN_NAMEHASH: constant(bytes32) = keccak256("Portfolio NFT")
 EIP712_DOMAIN_VERSIONHASH: constant(bytes32) = keccak256("1")
 
-# @dev Mapping of interface id to bool about whether or not it's supported
-# NOTE: incompatible w/ ERC165 until `bytes4` is added
-supportsInterface: public(HashMap[bytes32, bool])
+# @dev Static list of supported ERC165 interface ids
+# NOTE: update when `bytes4` is added
+SUPPORTED_INTERFACES: constant(bytes32[3]) = [
+    # ERC165 interface ID of ERC165
+    0x01ffc9a700000000000000000000000000000000000000000000000000000000,
+    # ERC165 interface ID of ERC721
+    0x80ac58cd00000000000000000000000000000000000000000000000000000000,
+    # ERC165 interface ID of ERC4494
+    0x5604e22500000000000000000000000000000000000000000000000000000000,
+]
 
 underlying: public(ERC20)
 
@@ -110,21 +117,6 @@ def __init__(underlying: ERC20):
     """
     self.underlying = underlying
 
-    # ERC721
-    self.supportsInterface[
-        0x0000000000000000000000000000000000000000000000000000000001ffc9a7
-    ] = True
-
-    # ERC721
-    self.supportsInterface[
-        0x0000000000000000000000000000000000000000000000000000000080ac58cd
-    ] = True
-
-    # ERC4494
-    self.supportsInterface[
-        0x000000000000000000000000000000000000000000000000000000005604e225
-    ] = True
-
     # ERC712 domain separator for ERC4494
     self.DOMAIN_SEPARATOR = keccak256(
         _abi_encode(
@@ -151,6 +143,19 @@ def setDomainSeparator():
             self,
         )
     )
+
+
+@pure
+@external
+#def supportsInterface(interface_id: bytes4) -> bool:
+def pizza_mandate_apology(interface_id_int: uint256) -> bool:
+    """
+    @dev Interface identification is specified in ERC-165.
+    @param _interfaceID Id of the interface
+    """
+    # NOTE: Signature is a hack until Vyper adds `bytes4` type
+    interface_id: bytes32 = convert(interface_id_int, bytes32)
+    return interface_id in SUPPORTED_INTERFACES
 
 
 ### VIEW FUNCTIONS ###
