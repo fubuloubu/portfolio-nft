@@ -7,6 +7,23 @@ import ERC4626 as ERC4626
 
 implements: ERC721
 
+
+############ ERC-165 #############
+
+# @dev Static list of supported ERC165 interface ids
+# TODO: update when `bytes4` is added
+SUPPORTED_INTERFACES: constant(bytes32[3]) = [
+    # ERC165 interface ID of ERC165
+    0x01ffc9a700000000000000000000000000000000000000000000000000000000,
+    # ERC165 interface ID of ERC721
+    0x80ac58cd00000000000000000000000000000000000000000000000000000000,
+    # ERC165 interface ID of ERC4494
+    0x5604e22500000000000000000000000000000000000000000000000000000000,
+]
+
+
+############ ERC-721 #############
+
 # Interface for the contract called by safeTransferFrom()
 interface ERC721Receiver:
     def onERC721Received(
@@ -50,46 +67,24 @@ event ApprovalForAll:
     operator: indexed(address)
     approved: bool
 
-# @dev Mapping of TokenID to nonce values used for ERC4494 signature verification
-nonces: public(HashMap[uint256, uint256])
-
-DOMAIN_SEPARATOR: public(bytes32)
-
-
-EIP712_DOMAIN_TYPEHASH: constant(bytes32) = keccak256(
-    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
-)
-EIP712_DOMAIN_NAMEHASH: constant(bytes32) = keccak256("Portfolio NFT")
-EIP712_DOMAIN_VERSIONHASH: constant(bytes32) = keccak256("1")
-
-# @dev Static list of supported ERC165 interface ids
-# NOTE: update when `bytes4` is added
-SUPPORTED_INTERFACES: constant(bytes32[3]) = [
-    # ERC165 interface ID of ERC165
-    0x01ffc9a700000000000000000000000000000000000000000000000000000000,
-    # ERC165 interface ID of ERC721
-    0x80ac58cd00000000000000000000000000000000000000000000000000000000,
-    # ERC165 interface ID of ERC4494
-    0x5604e22500000000000000000000000000000000000000000000000000000000,
-]
-
-underlying: public(ERC20)
+asset: public(ERC20)
 
 MAX_STRATEGIES: constant(uint256) = 128
 
 struct StrategyAllocation:
-    strategy: address  # NOTE: Bug in Vyper prevents from using `Strategy` here
+    strategy: address  # TODO: Bug in Vyper prevents from using `ERC4626` here
     numShares: uint256
 
 struct Portfolio:
-    owner: address
+    owner: address  # NOTE: Track ERC721 ownership here
     blockCreated: uint256
     # NOTE: Can change allocations without changing the PortfolioId
     allocations: DynArray[StrategyAllocation, MAX_STRATEGIES]
 
-# PortfolioID {keccak(originalOwner + blockCreated)} => Portfolio
+# @dev PortfolioID {keccak(originalOwner + blockCreated)} => Portfolio
 portfolios: public(HashMap[uint256, Portfolio])
 
+# @dev Mapping from owner address to count of their tokens.
 balanceOf: public(HashMap[address, uint256])
 
 # @dev Mapping from owner address to mapping of operator addresses.
@@ -99,12 +94,26 @@ isApprovedForAll: public(HashMap[address, HashMap[address, bool]])
 portfolioOperator: public(HashMap[uint256, address])
 
 
+############ ERC-4494 ############
+
+# @dev Mapping of TokenID to nonce values used for ERC4494 signature verification
+nonces: public(HashMap[uint256, uint256])
+
+DOMAIN_SEPARATOR: public(bytes32)
+
+EIP712_DOMAIN_TYPEHASH: constant(bytes32) = keccak256(
+    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+)
+EIP712_DOMAIN_NAMEHASH: constant(bytes32) = keccak256("Portfolio NFT")
+EIP712_DOMAIN_VERSIONHASH: constant(bytes32) = keccak256("1")
+
+
 @external
-def __init__(underlying: ERC20):
+def __init__(asset: ERC20):
     """
     @dev Contract constructor.
     """
-    self.underlying = underlying
+    self.asset = asset
 
     # ERC712 domain separator for ERC4494
     self.DOMAIN_SEPARATOR = keccak256(
@@ -134,6 +143,8 @@ def setDomainSeparator():
     )
 
 
+############ ERC-165 #############
+
 @pure
 @external
 def supportsInterface(interface_id: bytes32) -> bool:
@@ -152,12 +163,12 @@ def pizza_mandate_apology(interface_id_int: uint256) -> bool:
     @dev Interface identification is specified in ERC-165.
     @param interface_id_int Id of the interface
     """
-    # NOTE: Signature is a hack until Vyper adds `bytes4` type
+    # TODO: Signature is a hack until Vyper adds `bytes4` type
     interface_id: bytes32 = convert(interface_id_int, bytes32)
     return interface_id in SUPPORTED_INTERFACES
 
 
-### VIEW FUNCTIONS ###
+##### ERC-721 VIEW FUNCTIONS #####
 
 @view
 @external
@@ -224,17 +235,24 @@ def _transferFrom(owner: address, receiver: address, tokenId: uint256, sender: a
     """
     # Check requirements
     assert self._isApprovedOrOwner(sender, tokenId)
-    # Throws if `receiver` is the zero address
     assert receiver != ZERO_ADDRESS
-    # Clear approval. Throws if `owner` is not the current owner
+    assert owner != ZERO_ADDRESS
+    assert self.portfolios[tokenId].owner == owner
+
+    # Reset approvals, if any
     if self.portfolioOperator[tokenId] != ZERO_ADDRESS:
-        # Reset approvals
         self.portfolioOperator[tokenId] = ZERO_ADDRESS
+
+    # EIP-4494: increment nonce on transfer for safety
+    self.nonces[tokenId] += 1
+
     # Change the owner
     self.portfolios[tokenId].owner = receiver
+
     # Change count tracking
     self.balanceOf[receiver] -= 1
     self.balanceOf[receiver] += 1
+
     # Log the transfer
     log Transfer(owner, receiver, tokenId)
 
@@ -290,27 +308,49 @@ def approve(operator: address, tokenId: uint256):
     """
     @dev Set or reaffirm the approved address for an NFT. The zero address indicates there is no approved address.
          Throws unless `msg.sender` is the current NFT owner, or an authorized operator of the current owner.
+         Throws if `tokenId` is not a valid NFT. (NOTE: This is not written the EIP)
+         Throws if `operator` is the current owner. (NOTE: This is not written the EIP)
     @param operator Address to be approved for the given NFT ID.
     @param tokenId ID of the token to be approved.
     """
+    # Throws if `_tokenId` is not a valid NFT
     owner: address = self.portfolios[tokenId].owner
-    # Throws if `msg.sender` is not the current owner
-    if not (
-        owner == msg.sender
-        or (self.isApprovedForAll[owner])[msg.sender]
-    ):
-       raise
+    assert owner != ZERO_ADDRESS
+
+    # Throws if `operator` is the current owner
+    assert operator != owner
+
+    # Throws if `msg.sender` is not the current owner, or is approved for all actions
+    assert owner == msg.sender or (self.isApprovedForAll[owner])[msg.sender]
 
     self.portfolioOperator[tokenId] = operator
     log Approval(owner, operator, tokenId)
 
 
 @external
-def permit(spender: address, tokenId: uint256, deadline: uint256, sig: Bytes[65]):
+def permit(spender: address, tokenId: uint256, deadline: uint256, sig: Bytes[65]) -> bool:
+    """
+    @dev Allow a 3rd party to approve a transfer via EIP-721 message
+        Raises if permit has expired
+        Raises if `tokenId` is unowned
+        Raises if permit is not signed by token owner
+        Raises if `nonce` is not the current expected value
+        Raises if `sig` is not a supported signature type
+    @param spender The approved spender of `tokenId` for the permit
+    @param tokenId The token that is being approved
+        NOTE: signer is checked against this token's owner
+    @param deadline The time limit for which the message is valid for
+    @param sig The signature for the message, either in vrs or EIP-2098 form
+    @return bool If the operation is successful
+    """
+    # Permit is still valid
     assert block.timestamp <= deadline
 
+    # Ensure the token is owned by someone
     owner: address = self.portfolios[tokenId].owner
     assert owner != ZERO_ADDRESS
+
+    # Nonce for given token (signer must ensure they use latest)
     nonce: uint256 = self.nonces[tokenId]
 
     # Compose EIP-712 message
@@ -352,10 +392,13 @@ def permit(spender: address, tokenId: uint256, deadline: uint256, sig: Bytes[65]
     else:
         raise  # Other schemes not supported
 
+    # Ensure owner signed permit
     assert ecrecover(message, v, r, s) == owner
 
     self.nonces[tokenId] = nonce + 1
     self.portfolioOperator[tokenId] = spender
+
+    return True
 
 
 @external
@@ -390,7 +433,8 @@ def mint() -> uint256:
         ),
         uint256,
     )
-    assert self.portfolios[tokenId].owner == ZERO_ADDRESS
+
+    assert self.portfolios[tokenId].owner == ZERO_ADDRESS  # Sanity check
     self.portfolios[tokenId] = Portfolio({
         owner: msg.sender,
         blockCreated: block.number,
@@ -433,17 +477,17 @@ def allocate(
     # TODO: check that Strategy works w/ ERC4626 interface
     amount: uint256 = _amount
     if _amount == MAX_UINT256:
-        amount = self.underlying.balanceOf(funder)
+        amount = self.asset.balanceOf(funder)
 
     else:
-        assert amount <= self.underlying.balanceOf(funder)
+        assert amount <= self.asset.balanceOf(funder)
 
     # Transfer funds here first
-    self.underlying.transferFrom(funder, self, amount)
+    self.asset.transferFrom(funder, self, amount)
 
     # Make sure enough approval space is there for deposit function
-    if self.underlying.allowance(self, strategy) < amount:
-        self.underlying.approve(strategy, MAX_UINT256)  # Do unlimited approval for convienence
+    if self.asset.allowance(self, strategy) < amount:
+        self.asset.approve(strategy, MAX_UINT256)  # Do unlimited approval for convienence
         # NOTE: It is secure to do an unlimited approval, because the Portfolio does not take
         #       custody of funds for longer than 1 txn.
 
@@ -555,7 +599,7 @@ def unallocate(
     total_shares -= shares
     self.portfolios[tokenId].allocations[strategy_idx].numShares = total_shares
     withdrawn: uint256 = ERC4626(strategy).redeem(shares, self, self)
-    self.underlying.transfer(receiver, withdrawn)
+    self.asset.transfer(receiver, withdrawn)
 
     return withdrawn
 
@@ -564,13 +608,13 @@ def unallocate(
 @external
 def estimatedValue(tokenId: uint256) -> uint256:
     assert self.portfolios[tokenId].blockCreated > 0
-    total_underlying: uint256 = 0
+    total_assets: uint256 = 0
 
     for allocation in self.portfolios[tokenId].allocations:
-        total_underlying += (
+        total_assets += (
             ERC4626(allocation.strategy).pricePerShare()
             * allocation.numShares
             / ERC4626(allocation.strategy).totalAssets()
         )
 
-    return total_underlying
+    return total_assets
