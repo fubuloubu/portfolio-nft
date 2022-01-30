@@ -3,6 +3,8 @@
 from vyper.interfaces import ERC20
 from vyper.interfaces import ERC721
 
+import ERC4626 as ERC4626
+
 implements: ERC721
 
 # Interface for the contract called by safeTransferFrom()
@@ -74,19 +76,6 @@ SUPPORTED_INTERFACES: constant(bytes32[3]) = [
 underlying: public(ERC20)
 
 MAX_STRATEGIES: constant(uint256) = 128
-
-# NOTE: Strategy implements ERC20 and ERC4626
-interface Strategy:
-    # Underlying token that shares are in
-    def underlying() -> address: view
-
-    # Returns shares
-    def deposit(receiver: address, amount: uint256) -> uint256: nonpayable
-
-    # Returns tokens
-    def totalUnderlying() -> uint256: view
-    def exchangeRate() -> uint256: view
-    def redeem(sender: address, receiver: address, shares: uint256) -> uint256: nonpayable
 
 struct StrategyAllocation:
     strategy: address  # NOTE: Bug in Vyper prevents from using `Strategy` here
@@ -459,7 +448,7 @@ def allocate(
         #       custody of funds for longer than 1 txn.
 
     # Deposit tokens to strategy
-    numShares: uint256 = Strategy(strategy).deposit(self, amount)
+    numShares: uint256 = ERC4626(strategy).deposit(amount, self)
 
     # Search for strategy in set
     strategy_found: bool = False
@@ -565,7 +554,7 @@ def unallocate(
     # Withdraw shares and transfer tokens to receiver
     total_shares -= shares
     self.portfolios[tokenId].allocations[strategy_idx].numShares = total_shares
-    withdrawn: uint256 = Strategy(strategy).redeem(self, self, shares)
+    withdrawn: uint256 = ERC4626(strategy).redeem(shares, self, self)
     self.underlying.transfer(receiver, withdrawn)
 
     return withdrawn
@@ -579,9 +568,9 @@ def estimatedValue(tokenId: uint256) -> uint256:
 
     for allocation in self.portfolios[tokenId].allocations:
         total_underlying += (
-            Strategy(allocation.strategy).exchangeRate()
+            ERC4626(allocation.strategy).pricePerShare()
             * allocation.numShares
-            / Strategy(allocation.strategy).totalUnderlying()
+            / ERC4626(allocation.strategy).totalAssets()
         )
 
     return total_underlying
