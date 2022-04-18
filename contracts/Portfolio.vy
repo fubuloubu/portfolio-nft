@@ -1,24 +1,22 @@
 # @version 0.3.2
 
 from vyper.interfaces import ERC20
+from vyper.interfaces import ERC165
 from vyper.interfaces import ERC721
 
 import ERC4626 as ERC4626
 
+implements: ERC165
 implements: ERC721
 
 
 ############ ERC-165 #############
 
 # @dev Static list of supported ERC165 interface ids
-# TODO: update when `bytes4` is added
-SUPPORTED_INTERFACES: constant(bytes32[3]) = [
-    # ERC165 interface ID of ERC165
-    0x01ffc9a700000000000000000000000000000000000000000000000000000000,
-    # ERC165 interface ID of ERC721
-    0x80ac58cd00000000000000000000000000000000000000000000000000000000,
-    # ERC165 interface ID of ERC4494
-    0x5604e22500000000000000000000000000000000000000000000000000000000,
+SUPPORTED_INTERFACES: constant(bytes4[3]) = [
+    0x01ffc9a7,  # ERC165 interface ID of ERC165
+    0x80ac58cd,  # ERC165 interface ID of ERC721
+    0x5604e225,  # ERC165 interface ID of ERC4494
 ]
 
 
@@ -147,24 +145,11 @@ def setDomainSeparator():
 
 @pure
 @external
-def supportsInterface(interface_id: bytes32) -> bool:
+def supportsInterface(interface_id: bytes4) -> bool:
     """
     @dev Interface identification is specified in ERC-165.
     @param interface_id Id of the interface
     """
-    return interface_id in SUPPORTED_INTERFACES
-
-
-@pure
-@external
-#def supportsInterface(interface_id: bytes4) -> bool:
-def pizza_mandate_apology(interface_id_int: uint256) -> bool:
-    """
-    @dev Interface identification is specified in ERC-165.
-    @param interface_id_int Id of the interface
-    """
-    # TODO: Signature is a hack until Vyper adds `bytes4` type
-    interface_id: bytes32 = convert(interface_id_int, bytes32)
     return interface_id in SUPPORTED_INTERFACES
 
 
