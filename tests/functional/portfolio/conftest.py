@@ -8,13 +8,13 @@ def sudo(accounts):
 
 @pytest.fixture
 def token(project, sudo):
-    return sudo.deploy(project.TestToken)
+    return sudo.deploy(project.dependencies["erc4626"].Token)
 
 
 @pytest.fixture
 def new_strategy(project, token, sudo):
     def create_strategy():
-        return sudo.deploy(project.TestStrategy, token)
+        return sudo.deploy(project.dependencies["erc4626"].Vault, token)
 
     return create_strategy
 
