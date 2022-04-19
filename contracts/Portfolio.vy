@@ -4,7 +4,7 @@ from vyper.interfaces import ERC20
 from vyper.interfaces import ERC165
 from vyper.interfaces import ERC721
 
-import ERC4626 as ERC4626
+from erc4626 import ERC4626
 
 implements: ERC165
 implements: ERC721
@@ -596,10 +596,6 @@ def estimatedValue(tokenId: uint256) -> uint256:
     total_assets: uint256 = 0
 
     for allocation in self.portfolios[tokenId].allocations:
-        total_assets += (
-            ERC4626(allocation.strategy).pricePerShare()
-            * allocation.numShares
-            / ERC4626(allocation.strategy).totalAssets()
-        )
+        total_assets += ERC4626(allocation.strategy).convertToAssets(allocation.numShares)
 
     return total_assets

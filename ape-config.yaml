@@ -1,2 +1,13 @@
 plugins:
     - name: vyper
+    # Only needed to compile the ERC4626 project
+    - name: solidity
+
+dependencies:
+  - name: erc4626
+    github: fubuloubu/ERC4626
+    branch: main
+
+vyper:
+    dependency_imports:
+        erc4626: erc4626
